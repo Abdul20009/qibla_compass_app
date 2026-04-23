@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 Color white = const Color(0xFFFFFFFF);
-Color black = const Color(0xFF000000);
-Color primary = const Color(0xff1F3669);
+Color backgroud = Color(0xffF8F9FF);
+Color black =  Colors.black;
+Color appBarColor = Color(0xffFAFAF9);
+Color primary =  Color(0xff064E3B);
 Color pink = const Color(0xffF9CFD4);
 Color red = const Color(0xffDF5050);
 Color yellow = const Color(0xffFFE90B);
@@ -19,7 +21,7 @@ Color otherGrey = Color(0xffF9F9F9);
 const lightAppColor = Color(0xee009eea);
 const appdark = Color(0xff1E1E1E);
 const appPurple = Color(0xFF775CB0);
-const green = Color(0xff55FF00);
+Color greenAccent = Color(0xffD1FAE5);
 Color grey = const Color(0xFF9A9A9A);
 Color cautionHome = const Color(0xFFF9CFD4);
 Color backgroundBarrier = const Color(0xFFA6B4BE);
