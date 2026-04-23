@@ -45,7 +45,7 @@ class _HomeNavState extends State<HomeNav> with TickerProviderStateMixin {
     return Scaffold(
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: primary,
+          color: white,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(20),
@@ -62,32 +62,33 @@ class _HomeNavState extends State<HomeNav> with TickerProviderStateMixin {
         ),
         child: TabBar(
           controller: _tabController,
-          dividerColor: Colors.transparent,
-          labelColor: Color(0xffE3E3E3),
-          unselectedLabelColor: Color(0xffE3E3E3),
-          indicatorColor: Colors.transparent,
+          dividerColor: white,
+          labelColor: primary ,
+          unselectedLabelColor: Color(0xff065F46),
+          indicatorColor: primary,
           labelPadding: EdgeInsets.symmetric(horizontal: 4),
           isScrollable: false,
           tabs: [
             Tab(
               icon: Icon(Icons.compass_calibration,
-                  color: tab == 0 ? Colors.white : Colors.grey.shade400),
-              text: 'Compass',
+                  color: tab == 0 ? primary : greenAccent),
+              text: 'Compass' ,
+              
             ),
             Tab(
               icon: Icon(Icons.panorama_fisheye_rounded,
-                  color: tab == 1 ? Colors.white : Colors.grey.shade400),
+                  color: tab == 1 ? primary : greenAccent),
               text: 'Prayers',
             ),
            
             Tab(
               icon: Icon(Icons.mosque,
-                  color: tab == 2 ? Colors.white : Colors.grey.shade400),
+                  color: tab == 2 ? primary : greenAccent),
               text: 'Mosques',
             ),
             Tab(
               icon: Icon(Icons.settings,
-                  color: tab == 3 ? Colors.white : Colors.grey.shade400),
+                  color: tab == 3 ? primary : greenAccent),
               text: 'Settings',
             ),
           ],
