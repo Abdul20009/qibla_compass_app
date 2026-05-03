@@ -50,9 +50,37 @@ class CompassScreen extends StatelessWidget {
           SizedBox(width: 4,)
         ],
       ),
-      body: const Center(
-        child: Text('Compass Screen'),
-      ),
+      body: SafeArea(child: 
+      Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '119°',
+                style: TextStyle(color: primary, fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(width: 5,),
+              Text(
+                'SE',
+                style: TextStyle(color: primary, fontSize: 12, fontWeight: FontWeight.bold),
+              )
+
+            ],
+          ),
+          SizedBox(height: 10,),
+          Text(
+            'BERING TO MAKKAH',
+            style: TextStyle(color: primary, fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+          SizedBox(height: 20,),
+          Image.asset(
+            'assets/images/qibla comapss.png',
+          ),
+        ],
+      ))
     );
   }
 }
