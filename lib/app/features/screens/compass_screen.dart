@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:qibla_compass_app/app/core/app_theme.dart';
+import 'package:qibla_compass_app/app/features/widgets/app_bar_widget.dart';
 
 class CompassScreen extends StatefulWidget {
   const CompassScreen({super.key});
