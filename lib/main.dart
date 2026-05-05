@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qibla_compass_app/app/core/app_theme.dart';
-import 'package:qibla_compass_app/app/features/screens/home%20nav%20screen/bottom%20navigation%20screen/compass_screen.dart';
-import 'package:qibla_compass_app/app/features/screens/home%20nav%20screen/bottom%20navigation%20screen/mosques_screen.dart';
-import 'package:qibla_compass_app/app/features/screens/home%20nav%20screen/bottom%20navigation%20screen/prayers_screen.dart';
-import 'package:qibla_compass_app/app/features/screens/home%20nav%20screen/bottom%20navigation%20screen/settings_screen.dart';
+import 'package:qibla_compass_app/app/features/screens/compass_screen.dart';
+import 'package:qibla_compass_app/app/features/screens/mosques_screen.dart';
+import 'package:qibla_compass_app/app/features/screens/prayers_screen.dart';
+import 'package:qibla_compass_app/app/features/screens/settings_screen.dart';
+import 'package:qibla_compass_app/app/features/service/notification_service.dart';
 
-void main() {
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.init();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
