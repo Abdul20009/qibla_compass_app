@@ -1,7 +1,14 @@
+import 'dart:async';
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:qibla_compass_app/app/core/app_theme.dart';
-import 'package:qibla_compass_app/app/features/widgets/app_bar_widget.dart';
+import 'package:qibla_compass_app/app/features/service/location_service.dart';
+import 'package:qibla_compass_app/app/features/service/qibla_service.dart';
+
+import '../widgets/app_bar_widget.dart';
 
 class CompassScreen extends StatefulWidget {
   const CompassScreen({super.key});
@@ -10,35 +17,89 @@ class CompassScreen extends StatefulWidget {
   State<CompassScreen> createState() => _CompassScreenState();
 }
 
-class _CompassScreenState extends State<CompassScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _rotationController;
-  late Animation<double> _needleAnimation;
-  // Qibla bearing: 119 degrees SE (as shown in design)
-  final double _qiblaBearing = 119.0;
+class _CompassScreenState extends State<CompassScreen> {
+  StreamSubscription<CompassEvent>? _compassSub;
+  Position? _position;
+
+  double _deviceHeading = 0;
+  double _qiblaBearing = 0;
+  double _distanceKm = 0;
+
+  bool _isLoadingLocation = true;
+  String? _locationError;
+
+  static const double _alignThreshold = 5.0;
 
   @override
   void initState() {
     super.initState();
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    );
-    _needleAnimation = Tween<double>(
-      begin: 0,
-      end: (_qiblaBearing * math.pi) / 180,
-    ).animate(CurvedAnimation(
-      parent: _rotationController,
-      curve: Curves.elasticOut,
-    ));
-    _rotationController.forward();
+    _initLocation();
+    _startCompass();
   }
 
   @override
   void dispose() {
-    _rotationController.dispose();
+    _compassSub?.cancel();
     super.dispose();
   }
+
+  // ── Location ─────────────────────────────────────────────────────────────────
+
+  Future<void> _initLocation() async {
+    setState(() {
+      _isLoadingLocation = true;
+      _locationError = null;
+    });
+    try {
+      final pos = await LocationService.getCurrentPosition();
+      final bearing = QiblaService.calculateQiblaBearing(
+        pos.latitude,
+        pos.longitude,
+      );
+      final distance = QiblaService.distanceToKaaba(
+        pos.latitude,
+        pos.longitude,
+      );
+      setState(() {
+        _position = pos;
+        _qiblaBearing = bearing;
+        _distanceKm = distance;
+        _isLoadingLocation = false;
+      });
+    } catch (e) {
+      setState(() {
+        _locationError = e.toString().replaceFirst('Exception: ', '');
+        _isLoadingLocation = false;
+      });
+    }
+  }
+
+  // ── Compass sensor ────────────────────────────────────────────────────────────
+
+  void _startCompass() {
+    _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
+      if (event.heading == null) return;
+      if (mounted) setState(() => _deviceHeading = event.heading!);
+    });
+  }
+
+  // ── Derived ───────────────────────────────────────────────────────────────────
+
+  double get _qiblaNeedleAngle =>
+      _degToRad(_qiblaBearing - _deviceHeading);
+
+  bool get _isAligned {
+    final diff = (_qiblaBearing - _deviceHeading + 360) % 360;
+    return diff <= _alignThreshold || diff >= (360 - _alignThreshold);
+  }
+
+  String get _bearingLabel =>
+      '${_qiblaBearing.toStringAsFixed(0)}° '
+      '${QiblaService.bearingToCardinal(_qiblaBearing)}';
+
+  static double _degToRad(double deg) => deg * math.pi / 180;
+
+  // ── Build ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -47,27 +108,60 @@ class _CompassScreenState extends State<CompassScreen>
       body: SafeArea(
         child: Column(
           children: [
-            AppBarWidget(
-              title: 'Al-Qibla',
-              isDark: true,
-            ),
+            const AppBarWidget(title: 'Al-Qibla', isDark: true),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 16),
-                    _buildBearingLabel(),
-                    const SizedBox(height: 24),
-                    _buildCompassDial(),
-                    const SizedBox(height: 28),
-                    _buildAlignmentCard(),
-                    const SizedBox(height: 12),
-                    _buildCurrentPrayerCard(),
-                    const SizedBox(height: 12),
-                    _buildInfoRow(),
-                    const SizedBox(height: 20),
-                  ],
+              child: _isLoadingLocation
+                  ? _buildLoading()
+                  : _locationError != null
+                      ? _buildError()
+                      : _buildContent(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoading() {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(color: AppTheme.goldAccent),
+          SizedBox(height: 16),
+          Text(
+            'Getting your location...',
+            style: TextStyle(color: Colors.white54, fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.location_off, color: Colors.white38, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              _locationError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white60, fontSize: 14),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _initLocation,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryGreen,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(50),
                 ),
               ),
             ),
@@ -77,29 +171,36 @@ class _CompassScreenState extends State<CompassScreen>
     );
   }
 
+  Widget _buildContent() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        children: [
+          const SizedBox(height: 16),
+          _buildBearingLabel(),
+          const SizedBox(height: 24),
+          _buildCompassDial(),
+          const SizedBox(height: 28),
+          _buildAlignmentCard(),
+          const SizedBox(height: 12),
+          _buildCurrentPrayerCard(),
+          const SizedBox(height: 12),
+          _buildInfoRow(),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBearingLabel() {
     return Column(
       children: [
-        RichText(
-          text: const TextSpan(
-            children: [
-              TextSpan(
-                text: '119°',
-                style: TextStyle(
-                  color: AppTheme.goldAccent,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              TextSpan(
-                text: ' SE',
-                style: TextStyle(
-                  color: Colors.white60,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
+        Text(
+          _bearingLabel,
+          style: const TextStyle(
+            color: AppTheme.goldAccent,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 4),
@@ -117,84 +218,71 @@ class _CompassScreenState extends State<CompassScreen>
   }
 
   Widget _buildCompassDial() {
-    return Container(
+    return SizedBox(
       width: 280,
       height: 280,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.goldAccent.withOpacity(0.15),
-            blurRadius: 40,
-            spreadRadius: 10,
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 20,
-            spreadRadius: 5,
-          ),
-        ],
-      ),
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Outer glow ring
-          Container(
+          // Glow ring
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
             width: 280,
             height: 280,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(
-                color: AppTheme.goldAccent.withOpacity(0.3),
-                width: 2,
-              ),
-              gradient: RadialGradient(
-                colors: [
-                  Colors.white,
-                  const Color(0xFFF0EDE8),
-                ],
-              ),
+              boxShadow: [
+                BoxShadow(
+                  color: _isAligned
+                      ? AppTheme.goldAccent.withOpacity(0.4)
+                      : AppTheme.goldAccent.withOpacity(0.12),
+                  blurRadius: 40,
+                  spreadRadius: 10,
+                ),
+              ],
             ),
           ),
-          // Tick marks
+          // Dial — rotates so the world stays fixed, device rotates under it
+          Transform.rotate(
+            angle: _degToRad(-_deviceHeading),
+            child: Container(
+              width: 280,
+              height: 280,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppTheme.goldAccent.withOpacity(0.3),
+                  width: 2,
+                ),
+                gradient: const RadialGradient(
+                  colors: [Colors.white, Color(0xFFF0EDE8)],
+                ),
+              ),
+              child: CustomPaint(painter: _CompassTickPainter()),
+            ),
+          ),
+          // North needle (fixed red, always points up = north on screen)
           CustomPaint(
             size: const Size(260, 260),
-            painter: _CompassTickPainter(),
+            painter: _NorthNeedlePainter(),
+          ),
+          // Qibla needle (gold, rotates to Kaaba direction)
+          Transform.rotate(
+            angle: _qiblaNeedleAngle,
+            child: CustomPaint(
+              size: const Size(260, 260),
+              painter: _QiblaNeedlePainter(isAligned: _isAligned),
+            ),
           ),
           // Center dot
           Container(
             width: 12,
             height: 12,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: AppTheme.darkBg,
+              border: Border.all(color: AppTheme.goldAccent, width: 1.5),
             ),
-          ),
-          // North needle (gray)
-          AnimatedBuilder(
-            animation: _needleAnimation,
-            builder: (context, child) {
-              return Transform.rotate(
-                angle: _needleAnimation.value,
-                child: CustomPaint(
-                  size: const Size(260, 260),
-                  painter: _NorthNeedlePainter(),
-                ),
-              );
-            },
-          ),
-          // Qibla needle (gold)
-          AnimatedBuilder(
-            animation: _needleAnimation,
-            builder: (context, child) {
-              return Transform.rotate(
-                angle: _needleAnimation.value,
-                child: CustomPaint(
-                  size: const Size(260, 260),
-                  painter: _QiblaNeedlePainter(),
-                ),
-              );
-            },
           ),
         ],
       ),
@@ -202,43 +290,50 @@ class _CompassScreenState extends State<CompassScreen>
   }
 
   Widget _buildAlignmentCard() {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: _isAligned
+            ? Border.all(color: AppTheme.goldAccent, width: 1.5)
+            : null,
       ),
       child: Row(
         children: [
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
             width: 40,
             height: 40,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppTheme.goldAccent,
+              color: _isAligned ? AppTheme.goldAccent : Colors.grey.shade300,
             ),
-            child: const Icon(
-              Icons.check,
+            child: Icon(
+              _isAligned ? Icons.check : Icons.explore,
               color: Colors.white,
               size: 22,
             ),
           ),
           const SizedBox(width: 14),
-          const Column(
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Perfect Alignment',
-                style: TextStyle(
+                _isAligned ? 'Perfect Alignment' : 'Finding Qibla...',
+                style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              SizedBox(height: 2),
+              const SizedBox(height: 2),
               Text(
-                'You are currently facing the Kaaba',
-                style: TextStyle(
+                _isAligned
+                    ? 'You are currently facing the Kaaba'
+                    : 'Rotate your device to face Makkah',
+                style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
                 ),
@@ -260,13 +355,13 @@ class _CompassScreenState extends State<CompassScreen>
           left: BorderSide(color: AppTheme.goldAccent, width: 3),
         ),
       ),
-      child: Row(
+      child: const Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'CURRENT PRAYER',
                 style: TextStyle(
                   color: AppTheme.textSecondary,
@@ -275,8 +370,8 @@ class _CompassScreenState extends State<CompassScreen>
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 4),
-              const Text(
+              SizedBox(height: 4),
+              Text(
                 'Dhuhr',
                 style: TextStyle(
                   color: AppTheme.textPrimary,
@@ -289,7 +384,7 @@ class _CompassScreenState extends State<CompassScreen>
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              const Text(
+              Text(
                 '12:15 PM',
                 style: TextStyle(
                   color: AppTheme.textPrimary,
@@ -297,7 +392,7 @@ class _CompassScreenState extends State<CompassScreen>
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 2),
+              SizedBox(height: 2),
               Text(
                 'Ends in 2h 45m',
                 style: TextStyle(
@@ -320,21 +415,136 @@ class _CompassScreenState extends State<CompassScreen>
           child: _InfoCard(
             icon: Icons.straighten,
             label: 'Distance',
-            value: '4,782 km',
+            value: _distanceKm > 0
+                ? '${_distanceKm.toStringAsFixed(0)} km'
+                : '—',
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: _InfoCard(
-            icon: Icons.wb_sunny_outlined,
-            label: 'Solar Noon',
-            value: '12:12 PM',
+            icon: Icons.explore_outlined,
+            label: 'Heading',
+            value: '${_deviceHeading.toStringAsFixed(0)}°',
           ),
         ),
       ],
     );
   }
 }
+
+// ── Painters ──────────────────────────────────────────────────────────────────
+
+class _CompassTickPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    for (int i = 0; i < 72; i++) {
+      final angle = (i * 5 - 90) * math.pi / 180;
+      final isCardinal = i % 18 == 0;
+      final isMajor = i % 9 == 0;
+      final tickLen = isCardinal ? 14.0 : isMajor ? 10.0 : 5.0;
+
+      final paint = Paint()
+        ..color = isCardinal ? Colors.grey.shade600 : Colors.grey.withOpacity(0.35)
+        ..strokeWidth = isCardinal ? 2.0 : 0.8
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawLine(
+        Offset(center.dx + (radius - 8) * math.cos(angle),
+            center.dy + (radius - 8) * math.sin(angle)),
+        Offset(center.dx + (radius - 8 - tickLen) * math.cos(angle),
+            center.dy + (radius - 8 - tickLen) * math.sin(angle)),
+        paint,
+      );
+
+      if (isCardinal) {
+        final labels = ['N', 'E', 'S', 'W'];
+        final label = labels[(i ~/ 18) % 4];
+        final tp = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: label == 'N' ? Colors.red.shade400 : Colors.grey.shade600,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        final lx = center.dx + (radius - 34) * math.cos(angle);
+        final ly = center.dy + (radius - 34) * math.sin(angle);
+        tp.paint(canvas, Offset(lx - tp.width / 2, ly - tp.height / 2));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _NorthNeedlePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    canvas.drawLine(
+      center,
+      Offset(center.dx, center.dy - size.height / 2 + 28),
+      Paint()
+        ..color = Colors.red.shade400
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _QiblaNeedlePainter extends CustomPainter {
+  final bool isAligned;
+  const _QiblaNeedlePainter({required this.isAligned});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final tip = Offset(center.dx, center.dy - size.height / 2 + 28);
+
+    final paint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [
+          AppTheme.goldAccent.withOpacity(0.3),
+          AppTheme.goldAccent,
+        ],
+      ).createShader(Rect.fromPoints(center, tip))
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawLine(center, tip, paint);
+    canvas.drawCircle(tip, 7, Paint()..color = AppTheme.goldAccent);
+
+    if (isAligned) {
+      canvas.drawCircle(
+        tip,
+        13,
+        Paint()
+          ..color = AppTheme.goldAccent.withOpacity(0.3)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _QiblaNeedlePainter old) =>
+      old.isAligned != isAligned;
+}
+
+// ── Info Card ─────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
   final IconData icon;
@@ -360,117 +570,18 @@ class _InfoCard extends StatelessWidget {
         children: [
           Icon(icon, color: AppTheme.textSecondary, size: 20),
           const SizedBox(height: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 12,
-            ),
-          ),
+          Text(label,
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 12)),
           const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+          Text(value,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              )),
         ],
       ),
     );
   }
-}
-
-class _CompassTickPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2;
-
-    final paint = Paint()
-      ..color = Colors.grey.withOpacity(0.3)
-      ..strokeWidth = 1
-      ..strokeCap = StrokeCap.round;
-
-    for (int i = 0; i < 72; i++) {
-      final angle = (i * 5) * math.pi / 180;
-      final isMajor = i % 9 == 0;
-      final tickLength = isMajor ? 12.0 : 6.0;
-
-      final start = Offset(
-        center.dx + (radius - 10) * math.cos(angle),
-        center.dy + (radius - 10) * math.sin(angle),
-      );
-      final end = Offset(
-        center.dx + (radius - 10 - tickLength) * math.cos(angle),
-        center.dy + (radius - 10 - tickLength) * math.sin(angle),
-      );
-
-      canvas.drawLine(start, end, paint..strokeWidth = isMajor ? 1.5 : 0.8);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _NorthNeedlePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 20;
-
-    final paint = Paint()
-      ..color = Colors.grey.shade400
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
-
-    // Points opposite direction (north when not rotated = up)
-    canvas.drawLine(
-      center,
-      Offset(center.dx - radius * math.sin(0), center.dy - radius * math.cos(0)),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _QiblaNeedlePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 20;
-
-    // Gold gradient needle
-    final paint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          AppTheme.goldAccent.withOpacity(0.5),
-          AppTheme.goldAccent,
-          AppTheme.goldAccent,
-        ],
-      ).createShader(Rect.fromCircle(center: center, radius: radius))
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-
-    // Qibla direction needle (pointing in bearing direction)
-    canvas.drawLine(
-      center,
-      Offset(center.dx + radius * math.sin(0), center.dy + radius * math.cos(0)),
-      paint,
-    );
-
-    // Tip circle
-    final tipOffset = Offset(
-      center.dx + radius * math.sin(0),
-      center.dy + radius * math.cos(0),
-    );
-    canvas.drawCircle(tipOffset, 6, Paint()..color = AppTheme.goldAccent);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
