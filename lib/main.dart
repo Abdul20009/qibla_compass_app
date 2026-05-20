@@ -6,17 +6,25 @@ import 'package:qibla_compass_app/app/features/screens/mosques_screen.dart';
 import 'package:qibla_compass_app/app/features/screens/prayers_screen.dart';
 import 'package:qibla_compass_app/app/features/screens/settings_screen.dart';
 import 'package:qibla_compass_app/app/features/service/notification_service.dart';
+import 'package:qibla_compass_app/app/features/service/settings_service.dart';
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.init();
+
+  // Init services in parallel
+  await Future.wait([
+    NotificationService.init(),
+    SettingsService.init(),
+  ]);
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
     ),
   );
+
   runApp(const AlQiblaApp());
 }
 
