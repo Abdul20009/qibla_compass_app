@@ -8,12 +8,10 @@ class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
 
-  // Notification channel IDs
   static const _channelId = 'prayer_times';
   static const _channelName = 'Prayer Times';
   static const _channelDesc = 'Adhan notifications for each prayer time';
 
-  // Notification IDs per prayer (stable so rescheduling replaces them)
   static const Map<Prayer, int> _notifIds = {
     Prayer.fajr: 1,
     Prayer.dhuhr: 2,
@@ -22,31 +20,25 @@ class NotificationService {
     Prayer.isha: 5,
   };
 
-  /// Call once at app startup (before runApp or in main()).
   static Future<void> init() async {
     if (_initialized) return;
 
     tz_data.initializeTimeZones();
 
-    const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
-
     await _plugin.initialize(
-      const InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
+      settings: const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        ),
       ),
     );
 
     _initialized = true;
   }
 
-  /// Request notification permission (Android 13+ / iOS).
   static Future<bool> requestPermission() async {
     final android = _plugin
         .resolvePlatformSpecificImplementation<
@@ -71,8 +63,6 @@ class NotificationService {
     return true;
   }
 
-  /// Schedules notifications for all prayers in [times] that are
-  /// still in the future and are enabled in [enabledPrayers].
   static Future<void> schedulePrayerNotifications({
     required PrayerTimes times,
     required Map<Prayer, bool> enabledPrayers,
@@ -97,7 +87,7 @@ class NotificationService {
       await _scheduleOne(
         id: _notifIds[prayer]!,
         title: '🕌 ${PrayerTimesService.prayerName(prayer)} Prayer',
-        body: 'It\'s time for ${PrayerTimesService.prayerName(prayer)} — '
+        body: "It's time for ${PrayerTimesService.prayerName(prayer)} — "
             '${PrayerTimesService.formatTime12h(time)}',
         scheduledTime: time,
       );
@@ -113,11 +103,9 @@ class NotificationService {
     final tzTime = tz.TZDateTime.from(scheduledTime, tz.local);
 
     await _plugin.zonedSchedule(
-      id,
-      title,
-      body,
-      tzTime,
-      NotificationDetails(
+      id: id,
+      scheduledDate: tzTime,
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           _channelId,
           _channelName,
@@ -135,18 +123,17 @@ class NotificationService {
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+      title: title,
+      body: body,
+      payload: 'prayer_$id',
     );
   }
 
-  /// Cancel a single prayer notification.
   static Future<void> cancelPrayer(Prayer prayer) async {
     final id = _notifIds[prayer];
-    if (id != null) await _plugin.cancel(id);
+    if (id != null) await _plugin.cancel(id: id);
   }
 
-  /// Cancel all scheduled notifications.
   static Future<void> cancelAll() async {
     await _plugin.cancelAll();
   }
