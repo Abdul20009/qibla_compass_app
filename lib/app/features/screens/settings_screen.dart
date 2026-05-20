@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:qibla_compass_app/app/core/app_theme.dart';
+import 'package:qibla_compass_app/app/features/service/notification_service.dart';
+import 'package:qibla_compass_app/app/features/service/prayer_time_service.dart';
+import 'package:qibla_compass_app/app/features/service/settings_service.dart';
 import 'package:qibla_compass_app/app/features/widgets/app_bar_widget.dart';
-
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -11,15 +13,102 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _prayerAlerts = true;
-  bool _vibrateOnQibla = true;
+  // ── State (loaded from SettingsService) ────────────────────────────────────
+  late bool _prayerAlerts;
+  late bool _vibrateOnQibla;
+  late String _selectedMethod;
+  late String _selectedAsr;
+  late Map<String, bool> _prayerNotifs;
 
-  final Map<String, bool> _prayerNotifs = {
-    'Fajr': true,
-    'Dhuhr': true,
-    'Asr': false,
-    'Maghrib': true,
-  };
+  static const _asrMethods = ['Standard', 'Hanafi'];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFromPrefs();
+  }
+
+  void _loadFromPrefs() {
+    _prayerAlerts = SettingsService.prayerAlerts;
+    _vibrateOnQibla = SettingsService.vibrateOnQibla;
+    _selectedMethod = SettingsService.prayerMethod;
+    _selectedAsr = SettingsService.asrMethod;
+    _prayerNotifs = Map.from(SettingsService.allPrayerNotifs);
+  }
+
+  // ── Handlers ─────────────────────────────────────────────────────────────────
+
+  Future<void> _onPrayerAlertsChanged(bool value) async {
+    setState(() => _prayerAlerts = value);
+    await SettingsService.setPrayerAlerts(value);
+    if (!value) {
+      await NotificationService.cancelAll();
+    }
+  }
+
+  Future<void> _onVibrateChanged(bool value) async {
+    setState(() => _vibrateOnQibla = value);
+    await SettingsService.setVibrateOnQibla(value);
+  }
+
+  Future<void> _onMethodChanged(String? value) async {
+    if (value == null) return;
+    setState(() => _selectedMethod = value);
+    await SettingsService.setPrayerMethod(value);
+    _showRestartSnack('Calculation method updated. Pull to refresh Prayer Times.');
+  }
+
+  Future<void> _onAsrChanged(String? value) async {
+    if (value == null) return;
+    setState(() => _selectedAsr = value);
+    await SettingsService.setAsrMethod(value);
+    _showRestartSnack('Asr method updated. Pull to refresh Prayer Times.');
+  }
+
+  Future<void> _onPrayerNotifChanged(String prayer, bool value) async {
+    setState(() => _prayerNotifs[prayer] = value);
+    await SettingsService.setPrayerNotif(prayer, value);
+    if (!value) {
+      // cancel specific prayer
+      final prayerEnum = _nameToEnum(prayer);
+      if (prayerEnum != null) {
+        await NotificationService.cancelPrayer(prayerEnum);
+      }
+    }
+  }
+
+  void _showRestartSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: AppTheme.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  dynamic _nameToEnum(String name) {
+    // Using adhan Prayer enum indirectly through NotificationService
+    // This avoids importing adhan here
+    switch (name) {
+      case 'Fajr':
+        return _PrayerRef.fajr;
+      case 'Dhuhr':
+        return _PrayerRef.dhuhr;
+      case 'Asr':
+        return _PrayerRef.asr;
+      case 'Maghrib':
+        return _PrayerRef.maghrib;
+      case 'Isha':
+        return _PrayerRef.isha;
+      default:
+        return null;
+    }
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -36,10 +125,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 20),
-                    _buildSectionTitle('Location'),
-                    const SizedBox(height: 12),
-                    _buildLocationCard(),
-                    const SizedBox(height: 28),
                     _buildSectionTitle('Calculation Methods'),
                     const SizedBox(height: 12),
                     _buildCalculationCard(),
@@ -47,7 +132,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionTitle('Notifications'),
                     const SizedBox(height: 12),
                     _buildNotificationsCard(),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 28),
+                    _buildSectionTitle('Compass'),
+                    const SizedBox(height: 12),
+                    _buildCompassCard(),
+                    const SizedBox(height: 28),
+                    _buildSectionTitle('About'),
+                    const SizedBox(height: 12),
+                    _buildAboutCard(),
+                    const SizedBox(height: 30),
                   ],
                 ),
               ),
@@ -69,143 +162,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildLocationCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Location label
-          const Text(
-            'CURRENT LOCATION',
-            style: TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 10,
-              letterSpacing: 1.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Mecca, Saudi Arabia',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.textPrimary,
-                ),
-              ),
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppTheme.goldAccent,
-                ),
-                child: const Icon(
-                  Icons.star,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          // Map preview placeholder
-          Container(
-            height: 100,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF1A4A3A),
-                  Color(0xFF2D7A5E),
-                ],
-              ),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                CustomPaint(
-                  size: const Size(double.infinity, 100),
-                  painter: _MiniMapPainter(),
-                ),
-                const Icon(
-                  Icons.location_on,
-                  color: AppTheme.goldAccent,
-                  size: 40,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          // GPS Button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.my_location, size: 18),
-              label: const Text(
-                'Use GPS',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(50),
-                ),
-                elevation: 0,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Manual Button
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text(
-                'Set Manually',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.primaryGreen,
-                side: const BorderSide(color: AppTheme.primaryGreen),
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(50),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // ── Calculation Card ──────────────────────────────────────────────────────────
 
   Widget _buildCalculationCard() {
     return Container(
@@ -222,28 +179,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Column(
         children: [
-          _SettingsRow(
+          _buildDropdownRow(
             icon: Icons.grid_view_outlined,
             title: 'Prayer Method',
-            subtitle: 'Umm al-Qura University, Makkah',
+            subtitle: 'Calculation authority',
+            value: _selectedMethod,
+            items: PrayerTimesService.supportedMethods,
+            onChanged: _onMethodChanged,
             showDivider: true,
           ),
-          _SettingsRow(
+          _buildDropdownRow(
             icon: Icons.do_not_disturb_alt_outlined,
             title: 'Asr Jurisprudence',
-            subtitle: 'Standard (Shafi, Maliki, Hanbali)',
-            showDivider: true,
-          ),
-          _SettingsRow(
-            icon: Icons.swap_vert,
-            title: 'High Latitude Adjustment',
-            subtitle: 'Angle Based',
+            subtitle: _selectedAsr == 'Hanafi'
+                ? 'Hanafi (later shadow ratio)'
+                : 'Standard (Shafi, Maliki, Hanbali)',
+            value: _selectedAsr,
+            items: _asrMethods,
+            onChanged: _onAsrChanged,
             showDivider: false,
           ),
         ],
       ),
     );
   }
+
+  Widget _buildDropdownRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+    required bool showDivider,
+  }) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppTheme.tealAccent.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon,
+                    color: AppTheme.primaryGreen, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textPrimary,
+                        )),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                        )),
+                  ],
+                ),
+              ),
+              DropdownButton<String>(
+                value: value,
+                underline: const SizedBox.shrink(),
+                icon: const Icon(Icons.keyboard_arrow_down,
+                    color: AppTheme.textSecondary, size: 20),
+                style: const TextStyle(
+                  color: AppTheme.primaryGreen,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+                items: items
+                    .map((m) => DropdownMenuItem(
+                          value: m,
+                          child: Text(m,
+                              style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
+                onChanged: onChanged,
+              ),
+            ],
+          ),
+        ),
+        if (showDivider)
+          const Divider(
+              height: 1, indent: 68, color: AppTheme.dividerColor),
+      ],
+    );
+  }
+
+  // ── Notifications Card ────────────────────────────────────────────────────────
 
   Widget _buildNotificationsCard() {
     return Container(
@@ -260,92 +295,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Column(
         children: [
-          // Prayer alerts row
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: AppTheme.tealAccent.withOpacity(0.15),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.notifications_outlined,
-                        color: AppTheme.primaryGreen,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Prayer Alerts',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                          Text(
-                            'Enable notifications for all prayers',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Transform.scale(
-                      scale: 0.85,
-                      child: Switch(
-                        value: _prayerAlerts,
-                        onChanged: (v) => setState(() => _prayerAlerts = v),
-                        activeColor: Colors.white,
-                        activeTrackColor: AppTheme.primaryGreen,
-                        inactiveThumbColor: Colors.white,
-                        inactiveTrackColor: Colors.grey.shade300,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // Individual prayer toggles
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppTheme.lightBg,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    childAspectRatio: 3.5,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 8,
-                    children: _prayerNotifs.entries.map((entry) {
-                      return _PrayerToggleChip(
-                        name: entry.key,
-                        value: entry.value,
-                        onChanged: (v) =>
-                            setState(() => _prayerNotifs[entry.key] = v),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, indent: 16, endIndent: 16),
-          // Vibrate on Qibla
+          // Master toggle
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -357,45 +307,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: AppTheme.tealAccent.withOpacity(0.15),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.vibration,
-                    color: AppTheme.primaryGreen,
-                    size: 20,
-                  ),
+                  child: const Icon(Icons.notifications_outlined,
+                      color: AppTheme.primaryGreen, size: 20),
                 ),
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Vibrate on Qibla',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        'Haptic feedback when aligned',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textSecondary,
-                        ),
-                      ),
+                      Text('Prayer Alerts',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
+                          )),
+                      Text('Enable notifications for all prayers',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                          )),
                     ],
                   ),
                 ),
-                Transform.scale(
-                  scale: 0.85,
-                  child: Switch(
-                    value: _vibrateOnQibla,
-                    onChanged: (v) => setState(() => _vibrateOnQibla = v),
-                    activeColor: Colors.white,
-                    activeTrackColor: AppTheme.primaryGreen,
-                    inactiveThumbColor: Colors.white,
-                    inactiveTrackColor: Colors.grey.shade300,
+                _buildSwitch(
+                  value: _prayerAlerts,
+                  onChanged: _onPrayerAlertsChanged,
+                ),
+              ],
+            ),
+          ),
+
+          // Per-prayer toggles
+          if (_prayerAlerts) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.lightBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: _prayerNotifs.entries.map((entry) {
+                    return _buildPrayerNotifRow(
+                      entry.key,
+                      entry.value,
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ],
+
+          const Divider(height: 1, indent: 16, endIndent: 16,
+              color: AppTheme.dividerColor),
+
+          // Vibrate toggle
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppTheme.tealAccent.withOpacity(0.15),
+                    shape: BoxShape.circle,
                   ),
+                  child: const Icon(Icons.vibration,
+                      color: AppTheme.primaryGreen, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Vibrate on Qibla',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
+                          )),
+                      Text('Haptic feedback when aligned',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                          )),
+                    ],
+                  ),
+                ),
+                _buildSwitch(
+                  value: _vibrateOnQibla,
+                  onChanged: _onVibrateChanged,
                 ),
               ],
             ),
@@ -404,133 +407,200 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-}
 
-class _SettingsRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool showDivider;
-
-  const _SettingsRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.showDivider,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: AppTheme.tealAccent.withOpacity(0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: AppTheme.primaryGreen, size: 18),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(
-                Icons.chevron_right,
-                color: AppTheme.textSecondary,
-                size: 20,
-              ),
-            ],
-          ),
-        ),
-        if (showDivider)
-          const Divider(height: 1, indent: 68, color: AppTheme.dividerColor),
-      ],
-    );
-  }
-}
-
-class _PrayerToggleChip extends StatelessWidget {
-  final String name;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _PrayerToggleChip({
-    required this.name,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-      ),
+  Widget _buildPrayerNotifRow(String name, bool value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            name,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: AppTheme.textPrimary,
-            ),
+          Row(
+            children: [
+              Icon(_prayerIcon(name),
+                  size: 16, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Text(name,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppTheme.textPrimary,
+                  )),
+            ],
           ),
-          Icon(
-            Icons.volume_up_outlined,
-            size: 18,
-            color: value ? AppTheme.primaryGreen : AppTheme.textSecondary,
+          Transform.scale(
+            scale: 0.8,
+            child: Switch(
+              value: value,
+              onChanged: (v) => _onPrayerNotifChanged(name, v),
+              activeColor: Colors.white,
+              activeTrackColor: AppTheme.primaryGreen,
+              inactiveThumbColor: Colors.white,
+              inactiveTrackColor: Colors.grey.shade300,
+            ),
           ),
         ],
       ),
     );
   }
-}
 
-class _MiniMapPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(0.1)
-      ..strokeWidth = 1;
-
-    for (double x = 0; x < size.width; x += 20) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += 20) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+  IconData _prayerIcon(String name) {
+    switch (name) {
+      case 'Fajr':
+        return Icons.brightness_3;
+      case 'Dhuhr':
+        return Icons.wb_sunny_outlined;
+      case 'Asr':
+        return Icons.wb_sunny;
+      case 'Maghrib':
+        return Icons.home_outlined;
+      case 'Isha':
+        return Icons.nightlight_round;
+      default:
+        return Icons.access_time;
     }
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  // ── Compass Card ──────────────────────────────────────────────────────────────
+
+  Widget _buildCompassCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppTheme.tealAccent.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.vibration,
+                  color: AppTheme.primaryGreen, size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Vibrate on Qibla',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      )),
+                  Text('Haptic pulse when facing Makkah',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      )),
+                ],
+              ),
+            ),
+            _buildSwitch(
+              value: _vibrateOnQibla,
+              onChanged: _onVibrateChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── About Card ────────────────────────────────────────────────────────────────
+
+  Widget _buildAboutCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          _buildInfoRow('App Version', '1.0.0', Icons.info_outline),
+          const Divider(height: 1, indent: 68, color: AppTheme.dividerColor),
+          _buildInfoRow(
+              'Qibla Calculation', 'Spherical Trigonometry',
+              Icons.explore_outlined),
+          const Divider(height: 1, indent: 68, color: AppTheme.dividerColor),
+          _buildInfoRow('Mosque Data', 'OpenStreetMap (Overpass)',
+              Icons.mosque_outlined),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String title, String value, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppTheme.tealAccent.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child:
+                Icon(icon, color: AppTheme.primaryGreen, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                )),
+          ),
+          Text(value,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+              )),
+        ],
+      ),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────────
+
+  Widget _buildSwitch({
+    required bool value,
+    required Future<void> Function(bool) onChanged,
+  }) {
+    return Transform.scale(
+      scale: 0.85,
+      child: Switch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: Colors.white,
+        activeTrackColor: AppTheme.primaryGreen,
+        inactiveThumbColor: Colors.white,
+        inactiveTrackColor: Colors.grey.shade300,
+      ),
+    );
+  }
 }
+
+// Internal enum proxy to avoid importing adhan here
+enum _PrayerRef { fajr, dhuhr, asr, maghrib, isha }
