@@ -7,6 +7,7 @@ import 'package:qibla_compass_app/app/core/app_theme.dart';
 import 'package:qibla_compass_app/app/features/service/location_service.dart';
 import 'package:qibla_compass_app/app/features/service/notification_service.dart';
 import 'package:qibla_compass_app/app/features/service/prayer_time_service.dart';
+import 'package:qibla_compass_app/app/features/service/settings_service.dart';
 
 import '../widgets/app_bar_widget.dart';
 
@@ -27,20 +28,23 @@ class _PrayersScreenState extends State<PrayersScreen> {
   bool _isLoading = true;
   String? _error;
 
-  // Which prayers have notifications enabled
-  final Map<Prayer, bool> _notifEnabled = {
-    Prayer.fajr: true,
-    Prayer.dhuhr: true,
-    Prayer.asr: false,
-    Prayer.maghrib: true,
-    Prayer.isha: true,
-  };
+  // Pulled from SettingsService so changes in Settings screen take effect
+  Map<Prayer, bool> _notifEnabled = {};
+
+  static const _prayerList = [
+    Prayer.fajr,
+    Prayer.dhuhr,
+    Prayer.asr,
+    Prayer.maghrib,
+    Prayer.isha,
+  ];
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
+    _loadNotifPrefs();
     _load();
   }
 
@@ -52,6 +56,27 @@ class _PrayersScreenState extends State<PrayersScreen> {
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
+  void _loadNotifPrefs() {
+    final nameMap = _nameToEnum();
+    setState(() {
+      _notifEnabled = {
+        for (final p in _prayerList)
+          p: SettingsService.getPrayerNotif(
+              PrayerTimesService.prayerName(p)),
+      };
+    });
+    // silence unused warning
+    nameMap;
+  }
+
+  Map<String, Prayer> _nameToEnum() => {
+        'Fajr': Prayer.fajr,
+        'Dhuhr': Prayer.dhuhr,
+        'Asr': Prayer.asr,
+        'Maghrib': Prayer.maghrib,
+        'Isha': Prayer.isha,
+      };
+
   Future<void> _load() async {
     setState(() {
       _isLoading = true;
@@ -59,9 +84,12 @@ class _PrayersScreenState extends State<PrayersScreen> {
     });
     try {
       final pos = await LocationService.getCurrentPosition();
+      final params = PrayerTimesService.paramsForMethod(
+          SettingsService.prayerMethod);
       final times = PrayerTimesService.calculate(
         position: pos,
         date: DateTime.now(),
+        params: params,
       );
 
       setState(() {
@@ -71,7 +99,9 @@ class _PrayersScreenState extends State<PrayersScreen> {
       });
 
       _startTicker();
-      await _scheduleNotifications();
+      if (SettingsService.prayerAlerts) {
+        await _scheduleNotifications();
+      }
     } catch (e) {
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
@@ -83,12 +113,10 @@ class _PrayersScreenState extends State<PrayersScreen> {
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_times == null) return;
+      if (_times == null || !mounted) return;
       final next = _nextPrayerTime();
       if (next != null) {
-        setState(() {
-          _remaining = PrayerTimesService.timeUntil(next);
-        });
+        setState(() => _remaining = PrayerTimesService.timeUntil(next));
       }
     });
   }
@@ -103,9 +131,10 @@ class _PrayersScreenState extends State<PrayersScreen> {
 
   Future<void> _toggleNotification(Prayer prayer, bool value) async {
     setState(() => _notifEnabled[prayer] = value);
+    final name = PrayerTimesService.prayerName(prayer);
+    await SettingsService.setPrayerNotif(name, value);
     if (_times == null) return;
     if (value) {
-      // Re-schedule all (simplest approach)
       await _scheduleNotifications();
     } else {
       await NotificationService.cancelPrayer(prayer);
@@ -169,10 +198,23 @@ class _PrayersScreenState extends State<PrayersScreen> {
     return '$h:$m:$s';
   }
 
-  String get _hijriDate {
-    // adhan doesn't ship Hijri; we compute a rough approximation.
-    // For production, use the hijri package.
-    return '9 RABI\' AL-THANI 1445 AH';
+  String get _hijriDate => _approximateHijri();
+
+  String _approximateHijri() {
+    // Rough Hijri approximation — replace with `hijri` package for production
+    final now = DateTime.now();
+    final epoch = DateTime(622, 7, 16);
+    final days = now.difference(epoch).inDays;
+    final hijriYear = (days / 354.367).floor();
+    final months = [
+      'Muharram', 'Safar', "Rabi' al-Awwal", "Rabi' al-Thani",
+      "Jumada al-Awwal", "Jumada al-Thani", 'Rajab', "Sha'ban",
+      'Ramadan', 'Shawwal', "Dhu al-Qi'dah", 'Dhu al-Hijjah'
+    ];
+    final remaining = days - (hijriYear * 354.367).floor();
+    final monthIdx = (remaining / 29.5).floor().clamp(0, 11);
+    final day = (remaining % 29.5).floor() + 1;
+    return '${day} ${months[monthIdx]} ${1622 + hijriYear} AH';
   }
 
   String get _gregorianDate {
@@ -262,14 +304,6 @@ class _PrayersScreenState extends State<PrayersScreen> {
   }
 
   Widget _buildContent() {
-    final prayers = [
-      Prayer.fajr,
-      Prayer.dhuhr,
-      Prayer.asr,
-      Prayer.maghrib,
-      Prayer.isha,
-    ];
-
     return RefreshIndicator(
       color: AppTheme.primaryGreen,
       onRefresh: _load,
@@ -285,7 +319,7 @@ class _PrayersScreenState extends State<PrayersScreen> {
             if (_nextPrayer != null && _nextPrayer != Prayer.none)
               _buildNextPrayerCard(),
             const SizedBox(height: 20),
-            ...prayers.map((p) => _buildPrayerTile(p)),
+            ..._prayerList.map((p) => _buildPrayerTile(p)),
             const SizedBox(height: 16),
             _buildLocationFooter(),
             const SizedBox(height: 20),
@@ -399,7 +433,7 @@ class _PrayersScreenState extends State<PrayersScreen> {
                       color: AppTheme.goldAccent, size: 22),
                   const SizedBox(height: 4),
                   Text(
-                    PrayerTimesService.formatTime(time),
+                    PrayerTimesService.formatTime12h(time),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 13,
@@ -419,7 +453,7 @@ class _PrayersScreenState extends State<PrayersScreen> {
 
     final status = _statusOf(prayer);
     final name = PrayerTimesService.prayerName(prayer);
-    final time = PrayerTimesService.formatTime(_prayerTime(prayer));
+    final time = PrayerTimesService.formatTime12h(_prayerTime(prayer));
     final isUpcoming = status == PrayerStatus.upcoming;
     final isActive = status == PrayerStatus.active;
     final isPassed = status == PrayerStatus.passed;
@@ -452,7 +486,7 @@ class _PrayersScreenState extends State<PrayersScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            // Icon
+            // Prayer icon
             Container(
               width: 42,
               height: 42,
@@ -486,48 +520,52 @@ class _PrayersScreenState extends State<PrayersScreen> {
                   Text(
                     time,
                     style: TextStyle(
-                      color: AppTheme.textPrimary,
+                      color: isPassed
+                          ? AppTheme.textSecondary
+                          : AppTheme.textPrimary,
                       fontSize: isUpcoming ? 22 : 18,
                       fontWeight: FontWeight.w700,
+                      decoration: isPassed
+                          ? TextDecoration.lineThrough
+                          : null,
                     ),
                   ),
                 ],
               ),
             ),
-            // Trailing
+            // Trailing: status label + notification toggle
             if (isPassed)
               const Text(
                 'Passed',
                 style: TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13),
               )
-            else if (isActive)
-              Row(children: [
-                const Text('Active',
-                    style: TextStyle(
-                        color: AppTheme.warmYellow,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-                const SizedBox(width: 8),
-                _buildToggle(
-                  value: notifOn,
-                  onChanged: (v) => _toggleNotification(prayer, v),
-                ),
-              ])
             else
-              Row(children: [
-                if (isUpcoming)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text('Upcoming',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 13)),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isActive)
+                    const Text(
+                      'Active',
+                      style: TextStyle(
+                          color: AppTheme.warmYellow,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  if (isUpcoming && !isActive)
+                    Text(
+                      'Upcoming',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary.withOpacity(0.7),
+                          fontSize: 12),
+                    ),
+                  const SizedBox(width: 4),
+                  _buildToggle(
+                    value: notifOn,
+                    onChanged: (v) => _toggleNotification(prayer, v),
                   ),
-                _buildToggle(
-                  value: notifOn,
-                  onChanged: (v) => _toggleNotification(prayer, v),
-                ),
-              ]),
+                ],
+              ),
           ],
         ),
       ),
@@ -539,12 +577,12 @@ class _PrayersScreenState extends State<PrayersScreen> {
     required ValueChanged<bool> onChanged,
   }) {
     return Transform.scale(
-      scale: 0.85,
+      scale: 0.8,
       child: Switch(
         value: value,
         onChanged: onChanged,
         activeColor: Colors.white,
-        activeTrackColor: value ? AppTheme.primaryGreen : Colors.grey.shade300,
+        activeTrackColor: AppTheme.primaryGreen,
         inactiveThumbColor: Colors.white,
         inactiveTrackColor: Colors.grey.shade300,
       ),
@@ -565,6 +603,12 @@ class _PrayersScreenState extends State<PrayersScreen> {
               _position!.latitude,
               _position!.longitude,
             ),
+            style: const TextStyle(
+                color: AppTheme.textSecondary, fontSize: 12),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '· ${SettingsService.prayerMethod}',
             style: const TextStyle(
                 color: AppTheme.textSecondary, fontSize: 12),
           ),
