@@ -1,9 +1,99 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:qibla_compass_app/app/core/app_theme.dart';
+import 'package:qibla_compass_app/app/features/service/location_service.dart';
+import 'package:qibla_compass_app/app/features/service/mosque_service.dart';
 import 'package:qibla_compass_app/app/features/widgets/app_bar_widget.dart';
 
-class MosquesScreen extends StatelessWidget {
+class MosquesScreen extends StatefulWidget {
   const MosquesScreen({super.key});
+
+  @override
+  State<MosquesScreen> createState() => _MosquesScreenState();
+}
+
+class _MosquesScreenState extends State<MosquesScreen> {
+  List<Mosque> _mosques = [];
+  List<Mosque> _filtered = [];
+  Position? _position;
+
+  bool _isLoading = true;
+  String? _error;
+
+  final _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _searchController.addListener(_onSearch);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // ── Data ─────────────────────────────────────────────────────────────────────
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final pos = await LocationService.getCurrentPosition();
+      final mosques = await MosqueService.fetchNearby(
+        lat: pos.latitude,
+        lng: pos.longitude,
+        radiusMeters: 5000,
+      );
+      setState(() {
+        _position = pos;
+        _mosques = mosques;
+        _filtered = mosques;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _onSearch() {
+    final q = _searchController.text.toLowerCase();
+    setState(() {
+      _filtered = q.isEmpty
+          ? _mosques
+          : _mosques
+              .where((m) => m.name.toLowerCase().contains(q))
+              .toList();
+    });
+  }
+
+  Future<void> _navigate(Mosque mosque) async {
+    final uri = Uri.parse(mosque.mapsUrl);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open Google Maps')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openMapsSearch() async {
+    if (_position == null) return;
+    final uri = Uri.parse(
+        Mosque.searchUrl(_position!.latitude, _position!.longitude));
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -14,13 +104,60 @@ class MosquesScreen extends StatelessWidget {
           children: [
             const AppBarWidget(title: 'Al-Qibla'),
             Expanded(
-              child: Stack(
-                children: [
-                  _buildMapBackground(),
-                  _buildSearchBar(),
-                  _buildMosqueMarker(),
-                  _buildBottomCard(),
-                ],
+              child: _isLoading
+                  ? _buildLoading()
+                  : _error != null
+                      ? _buildError()
+                      : _buildContent(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoading() {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(color: AppTheme.primaryGreen),
+          SizedBox(height: 16),
+          Text(
+            'Finding nearby mosques...',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.mosque_outlined,
+                color: AppTheme.textSecondary, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 14),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _load,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryGreen,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50)),
               ),
             ),
           ],
@@ -29,26 +166,38 @@ class MosquesScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildMapBackground() {
-    return Positioned.fill(
-      child: CustomPaint(
-        painter: _MapGridPainter(),
-      ),
+  Widget _buildContent() {
+    return Column(
+      children: [
+        _buildSearchBar(),
+        _buildHeader(),
+        Expanded(
+          child: _filtered.isEmpty
+              ? _buildEmpty()
+              : RefreshIndicator(
+                  color: AppTheme.primaryGreen,
+                  onRefresh: _load,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    itemCount: _filtered.length,
+                    itemBuilder: (_, i) => _buildMosqueTile(_filtered[i], i),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
   Widget _buildSearchBar() {
-    return Positioned(
-      top: 16,
-      left: 20,
-      right: 20,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withOpacity(0.08),
               blurRadius: 12,
               offset: const Offset(0, 4),
             ),
@@ -58,184 +207,34 @@ class MosquesScreen extends StatelessWidget {
           children: [
             const Padding(
               padding: EdgeInsets.only(left: 16),
-              child: Icon(
-                Icons.search,
-                color: AppTheme.textSecondary,
-                size: 20,
-              ),
+              child: Icon(Icons.search,
+                  color: AppTheme.textSecondary, size: 20),
             ),
-            const Expanded(
+            Expanded(
               child: TextField(
-                decoration: InputDecoration(
+                controller: _searchController,
+                decoration: const InputDecoration(
                   hintText: 'Search nearby mosques...',
                   hintStyle: TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 14,
-                  ),
+                      color: AppTheme.textSecondary, fontSize: 14),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 14,
-                  ),
+                      horizontal: 12, vertical: 14),
                 ),
               ),
             ),
-            Container(
-              margin: const EdgeInsets.all(8),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryGreen,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.tune,
-                color: Colors.white,
-                size: 18,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMosqueMarker() {
-    return const Positioned(
-      top: 160,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: _MosqueMarker(),
-      ),
-    );
-  }
-
-  Widget _buildBottomCard() {
-    return Positioned(
-      bottom: 16,
-      left: 20,
-      right: 20,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 20,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Sultan Ahmed Mosque',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.textPrimary,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF3CD),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'OPEN',
-                          style: TextStyle(
-                            color: Color(0xFF856404),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.location_on_outlined,
-                        size: 16,
-                        color: AppTheme.textSecondary,
-                      ),
-                      const SizedBox(width: 4),
-                      const Expanded(
-                        child: Text(
-                          'Binbirdirek, At Meydanı Cd\nNo:10, Istanbul',
-                          style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 13,
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const Divider(height: 1, color: AppTheme.dividerColor),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _InfoChip(
-                          icon: Icons.near_me_outlined,
-                          label: 'Distance',
-                          value: '0.4 km',
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _InfoChip(
-                          icon: Icons.directions_walk,
-                          label: 'Walking',
-                          value: '6 mins',
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.navigation_outlined, size: 18),
-                  label: const Text(
-                    'Navigate',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    elevation: 0,
-                  ),
+            // "Open in Maps" shortcut
+            GestureDetector(
+              onTap: _openMapsSearch,
+              child: Container(
+                margin: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryGreen,
+                  borderRadius: BorderRadius.circular(10),
                 ),
+                child: const Icon(Icons.map_outlined,
+                    color: Colors.white, size: 18),
               ),
             ),
           ],
@@ -243,137 +242,228 @@ class MosquesScreen extends StatelessWidget {
       ),
     );
   }
-}
 
-class _MosqueMarker extends StatelessWidget {
-  const _MosqueMarker();
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            '${_filtered.length} mosque${_filtered.length == 1 ? '' : 's'} found',
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppTheme.textSecondary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          if (_position != null)
+            Row(
+              children: [
+                const Icon(Icons.location_on_outlined,
+                    size: 13, color: AppTheme.textSecondary),
+                const SizedBox(width: 3),
+                Text(
+                  'Within 5 km',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildEmpty() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.mosque_outlined,
+              size: 48, color: AppTheme.textSecondary),
+          const SizedBox(height: 12),
+          const Text(
+            'No mosques found nearby',
+            style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 15,
+                fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Try searching on Google Maps instead',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: _openMapsSearch,
+            icon: const Icon(Icons.map_outlined, size: 18),
+            label: const Text('Open Google Maps'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryGreen,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(50)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMosqueTile(Mosque mosque, int index) {
+    final isFirst = index == 0;
+
     return Container(
-      width: 46,
-      height: 46,
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: AppTheme.primaryGreen,
-        shape: BoxShape.circle,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: isFirst
+            ? Border.all(color: AppTheme.goldAccent, width: 1.5)
+            : null,
         boxShadow: [
           BoxShadow(
-            color: AppTheme.primaryGreen.withOpacity(0.4),
-            blurRadius: 12,
-            spreadRadius: 2,
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
-      child: const Icon(
-        Icons.mosque,
-        color: Colors.white,
-        size: 24,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                // Icon
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: isFirst
+                        ? AppTheme.goldAccent.withOpacity(0.15)
+                        : AppTheme.primaryGreen.withOpacity(0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.mosque,
+                    color: isFirst
+                        ? AppTheme.goldAccent
+                        : AppTheme.primaryGreen,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              mosque.name,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isFirst)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: AppTheme.goldAccent.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                'NEAREST',
+                                style: TextStyle(
+                                  color: AppTheme.goldAccent,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          _chip(
+                            Icons.near_me_outlined,
+                            mosque.distanceLabel,
+                          ),
+                          const SizedBox(width: 8),
+                          _chip(
+                            Icons.directions_walk,
+                            mosque.walkingTime,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _navigate(mosque),
+                icon: const Icon(Icons.navigation_outlined, size: 16),
+                label: const Text(
+                  'Navigate',
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
-}
 
-class _InfoChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-
-  const _InfoChip({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _chip(IconData icon, String label) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: AppTheme.lightBg,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
+          Icon(icon, size: 13, color: AppTheme.textSecondary),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppTheme.textSecondary,
+              fontWeight: FontWeight.w500,
             ),
-            child: Icon(icon, size: 16, color: AppTheme.textSecondary),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 11,
-                ),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
           ),
         ],
       ),
     );
   }
-}
-
-class _MapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Background
-    final bgPaint = Paint()
-      ..color = const Color(0xFFCDD8D0);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
-
-    // Grid lines
-    final linePaint = Paint()
-      ..color = Colors.white.withOpacity(0.4)
-      ..strokeWidth = 0.8;
-
-    // Horizontal lines
-    for (double y = 0; y < size.height; y += 28) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), linePaint);
-    }
-    // Vertical lines
-    for (double x = 0; x < size.width; x += 28) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), linePaint);
-    }
-
-    // Diagonal road-like shapes
-    final roadPaint = Paint()
-      ..color = Colors.white.withOpacity(0.3)
-      ..strokeWidth = 18
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawLine(
-      Offset(0, size.height * 0.3),
-      Offset(size.width, size.height * 0.5),
-      roadPaint,
-    );
-    canvas.drawLine(
-      Offset(size.width * 0.4, 0),
-      Offset(size.width * 0.6, size.height),
-      roadPaint,
-    );
-    canvas.drawLine(
-      Offset(size.width * 0.6, 0),
-      Offset(size.width * 0.3, size.height * 0.6),
-      roadPaint..strokeWidth = 10,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
