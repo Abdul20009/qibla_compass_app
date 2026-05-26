@@ -19,6 +19,7 @@ class CompassScreen extends StatefulWidget {
 
 class _CompassScreenState extends State<CompassScreen> {
   StreamSubscription<CompassEvent>? _compassSub;
+  Position? _position;
 
   double _deviceHeading = 0;
   double _qiblaBearing = 0;
@@ -60,6 +61,7 @@ class _CompassScreenState extends State<CompassScreen> {
         pos.longitude,
       );
       setState(() {
+        _position = pos;
         _qiblaBearing = bearing;
         _distanceKm = distance;
         _isLoadingLocation = false;
